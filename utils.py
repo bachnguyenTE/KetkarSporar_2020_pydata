@@ -91,6 +91,9 @@ def load_mat_struct(filepath):
     result["ch3"] = strct["ch3"][0, 0].squeeze()
     result["frame_nums"] = strct["frame_nums"][0, 0].squeeze()
 
+    # dataID identifies the biological fly (e.g. "160727ks_fly2")
+    result["dataID"] = str(strct["dataID"][0, 0].flat[0])
+
     # Nested xml struct
     xml = strct["xml"][0, 0]
     result["framerate"] = float(xml["framerate"][0, 0].flat[0])
@@ -266,10 +269,8 @@ def load_figure_data(data_dir, summary_df=None, region=None):
         fname = mat_path.name
         mat_data = load_mat_struct(str(mat_path))
 
-        fly_id = get_fly_id(fname, summary_df)
-        if fly_id is None:
-            # Assign a unique negative ID so it can still be grouped
-            fly_id = -hash(fname) % 100000
+        # Use dataID from .mat file as fly grouping key
+        fly_id = mat_data["dataID"]
         n_rois = mat_data["dRatio"].shape[0]
         fps = mat_data["framerate"]
 
@@ -1082,7 +1083,11 @@ def save_figure_to_hdf5(
     # Per-ROI data
     roi_grp = grp.require_group("per_roi")
     _write_dataset(roi_grp, "traces", rats)
-    _write_dataset(roi_grp, "fly_id", np.array(fly_ids))
+    fly_id_arr = np.array(fly_ids)
+    if fly_id_arr.dtype.kind in ("U", "O"):  # string fly IDs (dataID)
+        _write_dataset(roi_grp, "fly_id", fly_id_arr.astype(object), dtype=h5py.string_dtype())
+    else:
+        _write_dataset(roi_grp, "fly_id", fly_id_arr)
     if roi_names is not None:
         dt = h5py.string_dtype()
         _write_dataset(roi_grp, "roi_name", np.array(roi_names, dtype=object), dtype=dt)
@@ -1094,7 +1099,11 @@ def save_figure_to_hdf5(
         _write_dataset(fly_grp, "grand_mean", grand_mean)
         _write_dataset(fly_grp, "sem", sem)
         if fly_ids_unique is not None:
-            _write_dataset(fly_grp, "fly_ids", fly_ids_unique)
+            if fly_ids_unique.dtype.kind in ("U", "O"):
+                _write_dataset(fly_grp, "fly_ids", fly_ids_unique.astype(object),
+                               dtype=h5py.string_dtype())
+            else:
+                _write_dataset(fly_grp, "fly_ids", fly_ids_unique)
 
     # Time axis
     _write_dataset(grp, "time", time_axis)
