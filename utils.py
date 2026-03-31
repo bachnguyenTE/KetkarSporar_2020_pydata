@@ -666,15 +666,17 @@ def aggregate_adapting_contrast(roi_data_list, off_stimulus=True):
     names = []
 
     # Build the cantor→epoch mapping for OFF stimulus
+    # fstimval 1–7 are 7 different OFF-step luminances; fstimval 0 = background
+    # cantor(X, 0) identifies the flash type where X is the fstimval level
     if off_stimulus:
         epoch_map = {
-            cantor(1, 0): 0,  # 100% OFF → 50% OFF
-            cantor(2, 0): 1,  # 100% OFF → GREY
-            cantor(3, 0): 2,  # 100% OFF → 50% ON
-            cantor(4, 0): 3,  # 100% OFF → 100% ON
-            cantor(5, 0): 4,  # 50% OFF → 100% OFF
-            cantor(6, 0): 5,  # 50% OFF → GREY
-            cantor(7, 0): 6,  # 50% OFF → 50% ON
+            cantor(1, 0): 0,
+            cantor(2, 0): 1,
+            cantor(3, 0): 2,
+            cantor(4, 0): 3,
+            cantor(5, 0): 4,
+            cantor(6, 0): 5,
+            cantor(7, 0): 6,
         }
     else:
         # ON-ON stimulus mapping (not currently used for figures of interest)
@@ -784,7 +786,63 @@ def aggregate_adapting_contrast(roi_data_list, off_stimulus=True):
         names.append(roi["name"])
 
     fly_ids = np.array(fly_ids)
-    return {"rats": rats, "flyID": fly_ids, "name": names}
+
+    # Extract fstimval → fstimpos1 mapping from data
+    fstimval_to_fstimpos1 = {}
+    for roi in roi_data_list:
+        ifp1 = roi.get("ifstimpos1")
+        if ifp1 is None:
+            continue
+        istim = roi["istim"].astype(int)
+        for level in range(8):
+            mask = istim == level
+            if not mask.any():
+                continue
+            vals = ifp1[mask]
+            unique, counts = np.unique(np.round(vals, 4), return_counts=True)
+            fstimval_to_fstimpos1[level] = unique[np.argmax(counts)]
+        break  # one ROI is enough — mapping is consistent across recordings
+
+    # Per-epoch stimulus traces using fstimpos1 (luminance fraction)
+    # The physical stimulus has TWO steps within each flash:
+    #   A step (samples 150–179, 3s) and B step (samples 180–209, 3s)
+    # fstimpos1 in the .mat data only records the A-step value for the
+    # entire epoch; the B step (25% Weber contrast from A) is not encoded
+    # in the metadata but is physically present on screen.
+    # B_commanded = 0.75 * A_commanded (25% Weber contrast decrement)
+    bg = fstimval_to_fstimpos1.get(0, 1.0)
+    stim_traces = np.full((N_EPOCHS, total_len), bg)
+    for ep in range(N_EPOCHS):
+        fp1_a = fstimval_to_fstimpos1.get(ep + 1, 0.0)
+        fp1_b = 0.75 * fp1_a  # 25% Weber contrast: (B - A) / A = -0.25
+        stim_traces[ep, 150:180] = fp1_a  # A step (3s)
+        stim_traces[ep, 180:210] = fp1_b  # B step (3s)
+
+    # Epoch labels from MATLAB-calibrated measurements
+    # (main_ADaptingContrastStep.m lines 31–35)
+    A_LUMINANCE = [75, 64, 54, 43, 32, 21]
+    B_LUMINANCE = [57, 48, 40, 32, 24, 16]
+    A_CONTRAST = [-25.0, -35.7, -46.4, -57.1, -67.9, -78.6]
+    epoch_labels = []
+    for i in range(6):
+        epoch_labels.append(
+            f"c={A_CONTRAST[i]:.0f}% (A={A_LUMINANCE[i]}%, B={B_LUMINANCE[i]}%)"
+        )
+    # Epoch 6: no MATLAB calibration — estimate from fstimpos1
+    fp1_7 = fstimval_to_fstimpos1.get(7, 0.0938)
+    epoch_labels.append(f"c≈{(fp1_7 - bg) / bg * 100:.0f}% (A≈{fp1_7 * 100:.0f}%, not in paper)")
+
+    return {
+        "rats": rats,
+        "flyID": fly_ids,
+        "name": names,
+        "epoch_labels": epoch_labels,
+        "stim_traces": stim_traces,
+        "a_luminance": A_LUMINANCE,
+        "b_luminance": B_LUMINANCE,
+        "a_contrast": A_CONTRAST,
+        "fstimval_to_fstimpos1": fstimval_to_fstimpos1,
+    }
 
 
 def aggregate_05steps(roi_data_list):
